@@ -1,3 +1,4 @@
+<!-- filepath: c:\Users\nhsd\Desktop\Web\website\3DCarGeem\ProjectX.html -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -58,8 +59,6 @@
       color: white;
       z-index: 10;
       display: none;
-      opacity: 0;
-      transition: opacity 0.5s ease-in-out;
     }
 
     #sidebar {
@@ -192,16 +191,11 @@
     const speedDial = document.getElementById('speedDial');
     const sidebar = document.getElementById('sidebar');
 
-    // Fade out title screen
     gameTitleScreen.style.opacity = '0';
-
-    // Show UI elements (initially transparent)
-    speedDial.style.display = 'grid';
     sidebar.style.display = 'flex';
 
     // Fade them in
     setTimeout(() => {
-      speedDial.style.opacity = '1';
       sidebar.style.opacity = '1';
     }, 0);
 
@@ -224,6 +218,14 @@
   window.onload = () => {
     document.getElementById('startButton').onclick = startGame;
     document.getElementById('toggleCarPickerBtn').addEventListener('click', toggleCarPicker);
+
+    // Add event listener to gridItem1 to spawn the car
+    document.getElementById('gridItem1').addEventListener('click', function() {
+      spawnCar();
+    });
+    // Walkable block controls
+    document.addEventListener("keydown", e => walkKeys[e.code] = true);
+    document.addEventListener("keyup", e => delete walkKeys[e.code]);
   };
 
   let camera, scene, renderer;
@@ -235,7 +237,8 @@
   let mph = 0;
   const maxSpeed = 2;
 
-  let gearMode = "drive"; // Options: "drive", "reverse", "neutral"
+  let gearMode = "";
+  if (block && blockBeingUsed) gearMode = "neutral"; // Start in neutral gear
   let gear = 0;
 
   let cameraOffsetZ = 5;
@@ -244,6 +247,17 @@
   let targetCameraOffsetX = cameraOffsetX;
   const cameraMoveDistance = 0.2;
   const cameraMoveSpeed = 0.025;
+
+  let walkableBlock;
+  let walkableBlockPosition = new THREE.Vector3(0, 1.00125, 0);
+  let walkableBlockRotation = new THREE.Vector3(0, 0, 0);
+  let walkableBlockSpeed = 0.12;
+  const walkKeys = {};
+
+  let blockBeingUsed = false;
+
+  let spaceHeldStart = null;
+  let spaceHeldTimeout = 2000; // 2 seconds in ms 
 
   let targetFov = 80;
   const maxFov = 90;
@@ -260,6 +274,94 @@
     scene.add(mesh);
     return mesh;
   }
+
+  // Function to spawn the car (reset block position and rotation)
+  function spawnCar() {
+    // Remove the previous block if it exists
+    if (block) {
+      scene.remove(block);
+      block.geometry.dispose();
+      block.material.dispose();
+      block = null;
+    }
+
+    // Calculate spawn position just in front of walkableBlock
+    let spawnOffset = new THREE.Vector3(0, 0, -2.5); // 2.5 units in front
+    spawnOffset.applyAxisAngle(new THREE.Vector3(0, 1, 0), walkableBlockRotation.y);
+    let spawnPos = walkableBlockPosition.clone().add(spawnOffset);
+
+    block = createBlock(spawnPos.x, spawnPos.y, spawnPos.z, 2.25, 1.25, 4, 0xff00ff);
+    if (block) {
+      // Reset position and rotation
+      blockPosition.set(spawnPos.x, spawnPos.y, spawnPos.z);
+      blockRotation.set(0, walkableBlockRotation.y, 0); // Match facing direction
+      targetBlockRotation.set(0, walkableBlockRotation.y, 0);
+      velocity = 0;
+      mph = 0;
+      gearMode = "neutral"; // Reset gear mode to neutral
+      // Optionally, hide the car picker UI after picking
+      const carPicker = document.getElementById('carPicker');
+      if (carPicker) carPicker.style.display = 'none';
+    }
+  }
+
+function checkBlockContact() {
+  if (!walkableBlock || !block) {
+    blockBeingUsed = false;
+    return;
+  }
+  // Simple AABB collision check
+  const a = walkableBlock;
+  const b = block;
+  const aPos = a.position, bPos = b.position;
+  const aSize = { x: a.geometry.parameters.width, y: a.geometry.parameters.height, z: a.geometry.parameters.depth };
+  const bSize = { x: b.geometry.parameters.width, y: b.geometry.parameters.height, z: b.geometry.parameters.depth };
+
+  const collision =
+    Math.abs(aPos.x - bPos.x) < (aSize.x / 2 + bSize.x / 2) &&
+    Math.abs(aPos.y - bPos.y) < (aSize.y / 2 + bSize.y / 2) &&
+    Math.abs(aPos.z - bPos.z) < (aSize.z / 2 + bSize.z / 2);
+
+  if (collision && !blockBeingUsed) {
+    // Lock walkableBlock to the center of block
+    walkableBlockPosition.copy(block.position);
+    walkableBlock.position.copy(block.position);
+    blockBeingUsed = true;
+    spaceHeldStart = null;
+  }
+
+  if (blockBeingUsed) {
+    // Keep walkableBlock locked to block center
+    walkableBlockPosition.copy(block.position);
+    walkableBlock.position.copy(block.position);
+
+    // Check for spacebar hold to eject
+    if (walkKeys["Space"]) {
+      if (!spaceHeldStart) spaceHeldStart = Date.now();
+      if (Date.now() - spaceHeldStart >= spaceHeldTimeout) {
+        // Eject walkableBlock to the side of the block
+        const ejectOffset = new THREE.Vector3(2.5, 0, 0); // 2.5 units to the right
+        ejectOffset.applyAxisAngle(new THREE.Vector3(0, 1, 0), block.rotation.y);
+        walkableBlockPosition.copy(block.position).add(ejectOffset);
+        walkableBlock.position.copy(walkableBlockPosition);
+        blockBeingUsed = false;
+        spaceHeldStart = null;
+      }
+    } else {
+      spaceHeldStart = null;
+    }
+  } else if (!collision) {
+    spaceHeldStart = null;
+    blockBeingUsed = false;
+  }
+  if (blockBeingUsed) {
+  // Hide walkableBlock when inside block
+  walkableBlock.visible = false;
+} else {
+  // Show walkableBlock when not inside block
+  walkableBlock.visible = true;
+}
+}
 
   function init() {
     camera = new THREE.PerspectiveCamera(targetFov, window.innerWidth / window.innerHeight, 0.1, 1000);
@@ -299,7 +401,8 @@
     createBlock(16, 3.00125, 0, 6, 6, 10000, 0x0000ff);
     createBlock(-16, 3.00125, 0, 6, 6, 10000, 0x0000ff);
 
-    block = createBlock(0, 1.00125, 0, 2.25, 1.25, 4, 0xff00ff);
+    // --- SPAWN WALKABLE BLOCK ON LOAD ---
+    walkableBlock = createBlock(0, 1.00125, 0, 1, 2, 1, 0x00ff00);
 
     const light = new THREE.DirectionalLight(0xffffff, 1);
     light.position.set(2, 5, 2);
@@ -313,6 +416,16 @@
     document.addEventListener("keydown", e => keys[e.code] = true);
     document.addEventListener("keyup", e => delete keys[e.code]);
   }
+
+function updateWalkableBlock() {
+  if (!walkableBlock) return;
+  // Move in world axes (no lerp, just direct movement)
+  if (walkKeys["KeyW"]) walkableBlockPosition.z -= walkableBlockSpeed;
+  if (walkKeys["KeyS"]) walkableBlockPosition.z += walkableBlockSpeed;
+  if (walkKeys["KeyA"]) walkableBlockPosition.x -= walkableBlockSpeed;
+  if (walkKeys["KeyD"]) walkableBlockPosition.x += walkableBlockSpeed;
+  walkableBlock.position.copy(walkableBlockPosition);
+}
 
   function getAccelerationForSpeed(speed) {
     const accelMap = [
@@ -538,6 +651,7 @@
   let maxTiltAngle = 1.5; // max degrees tilt forward/back
 
   function updateBlock() {
+    if (!block) return;
     const forward = keys["KeyW"];
     const backward = keys["KeyS"];
     const toggleReverseOn = keys["KeyQ"];
@@ -546,7 +660,7 @@
     const right = keys["KeyD"];
     const tiltForward = keys["KeyT"];
 
-    if (toggleReverseOn && !qPressedLastFrame) {
+    if (toggleReverseOn && !qPressedLastFrame && blockBeingUsed) {
       if (gearMode === "drive") {
         gearMode = "neutral";
       } else if (gearMode === "neutral" && velocity <= 0) {
@@ -554,12 +668,17 @@
       }
     }
 
-    if (toggleReverseOff && !ePressedLastFrame) {
+    if (toggleReverseOff && !ePressedLastFrame && blockBeingUsed) {
       if (gearMode === "reverse") {
         gearMode = "neutral";
       } else if (gearMode === "neutral" && velocity >= 0) {
         gearMode = "drive";
       }
+    }
+
+    if (!blockBeingUsed) {
+      // Reset gear mode to neutral if not using the block
+      gearMode = "neutral";
     }
 
     // Update key states
@@ -670,29 +789,44 @@
     camera.fov = targetFov;
     camera.updateProjectionMatrix();
 
-    // Update speed display
-    document.getElementById("speedDial").textContent = `Speed: ${velocity.toFixed(2)} (${mph.toFixed(0)} mph)`;
+    if (blockBeingUsed) {
+      document.getElementById("speedDial").textContent =
+      `Speed: ${velocity.toFixed(2)} (${mph.toFixed(0)} mph) | Gear: ${gearMode}`;
+      document.getElementById("speedDial").style.display = "grid"; // Hide speed dial if not using the block
+    } else {
+      document.getElementById("speedDial").style.display = "none"; // Hide speed dial if not using the block
+    }
   }
 
   function animate() {
     requestAnimationFrame(animate);
 
-    block.position.y = 1.125;
+    updateWalkableBlock();
+    checkBlockContact();
 
-    // Apply lerp for smooth rotation
-    blockRotation.lerp(targetBlockRotation, 0.1);
+    // --- CAMERA FOLLOWS WALKABLE BLOCK AT ALL TIMES ---
+    if (walkableBlock) {
+    const offset = new THREE.Vector3(0, 3, 7.5);
+    offset.applyAxisAngle(new THREE.Vector3(0, 1, 0), walkableBlockRotation.y);
+    camera.position.copy(walkableBlock.position).add(offset);
+    camera.lookAt(walkableBlock.position);
+    camera.fov = 80;
+    }
 
-    block.position.lerp(blockPosition, 0.1);
-    block.rotation.set(blockRotation.x, blockRotation.y, blockRotation.z);
-    
-    camera.fov = THREE.MathUtils.lerp(camera.fov, targetFov, fovSpeed);
-
-    camera.updateProjectionMatrix();
-
+    if (block && blockBeingUsed) {
     const offset = new THREE.Vector3(0, 3, 7.5);
     offset.applyAxisAngle(new THREE.Vector3(0, 1, 0), blockRotation.y);
     camera.position.copy(block.position).add(offset);
     camera.lookAt(block.position);
+    camera.fov = THREE.MathUtils.lerp(camera.fov, targetFov, fovSpeed);
+
+    block.position.y = 1.125;
+    blockRotation.lerp(targetBlockRotation, 0.1);
+    block.position.lerp(blockPosition, 0.1);
+    block.rotation.set(blockRotation.x, blockRotation.y, blockRotation.z);
+    }
+    
+    camera.updateProjectionMatrix();
 
     renderer.render(scene, camera);
   }
@@ -708,7 +842,7 @@
   setInterval(updateBlock, 16);
 </script>
 
-<div id="speedDial">Speed: 0.00 (0 mph)</div>
+<div id="speedDial"></div>
 
 </body>
 </html>
