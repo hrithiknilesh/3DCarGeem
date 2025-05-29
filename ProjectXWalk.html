@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <title>WASD Block Movement</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden; /* Hide scrollbars */
+        }
+        canvas {
+            display: block; /* Remove extra space below canvas */
+        }
+    </style>
+</head>
+<body>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.150.1/build/three.min.js"></script>
+    <script>
+        let camera, scene, renderer, block;
+        const keys = {}; // Object to store pressed keys
+
+        // Initialize the Three.js scene, camera, and renderer
+        function init() {
+            // Camera setup
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 5, 10); // Position the camera
+            camera.lookAt(0, 0, 0); // Make the camera look at the origin
+
+            // Scene setup
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x80c7ff); // Light blue background
+
+            // Create a ground plane
+            const groundGeometry = new THREE.PlaneGeometry(50, 50);
+            const groundMaterial = new THREE.MeshBasicMaterial({ color: 0xaaaaaa, side: THREE.DoubleSide });
+            const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+            ground.rotation.x = -Math.PI / 2; // Rotate to be horizontal
+            scene.add(ground);
+
+            // Create the controllable block
+            const blockGeometry = new THREE.BoxGeometry(0.5, 2, 0.5); // Width, Height, Depth
+            const blockMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 }); // Red color
+            block = new THREE.Mesh(blockGeometry, blockMaterial);
+            block.position.y = 1; // Lift half its height so it sits on the ground
+            scene.add(block);
+
+            // Add a simple ambient light (for visibility)
+            const ambientLight = new THREE.AmbientLight(0x404040);
+            scene.add(ambientLight);
+
+            // Add a directional light (for shadows/direction)
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(5, 10, 7.5);
+            scene.add(directionalLight);
+
+            // Renderer setup
+            renderer = new THREE.WebGLRenderer();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+
+            // Event listeners for keyboard input
+            document.addEventListener('keydown', onKeyDown);
+            document.addEventListener('keyup', onKeyUp);
+            window.addEventListener('resize', onWindowResize);
+        }
+
+        // Handle key down events
+        function onKeyDown(event) {
+            keys[event.code] = true;
+        }
+
+        // Handle key up events
+        function onKeyUp(event) {
+            keys[event.code] = false;
+        }
+
+        // Handle window resizing
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // Animation loop
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const moveSpeed = 0.1; // How fast the block moves
+
+            // Move the block based on WASD keys
+            if (keys['KeyW']) { // Forward
+                block.position.z -= moveSpeed;
+            }
+            if (keys['KeyS']) { // Backward
+                block.position.z += moveSpeed;
+            }
+            if (keys['KeyA']) { // Left
+                block.position.x -= moveSpeed;
+            }
+            if (keys['KeyD']) { // Right
+                block.position.x += moveSpeed;
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        // Initialize and start animation
+        init();
+        animate();
+    </script>
+</body>
+</html>
