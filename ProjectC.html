@@ -105,7 +105,6 @@
       background-color: rgb(0, 0, 0, 0.75); /* slight dark overlay */
       backdrop-filter: blur(16px); /* the actual blur */
       -webkit-backdrop-filter: blur(16px), brightness(0.2), ; /* Safari support */
-      display: flex;
       flex-direction: column;
       justify-content: center;
       align-items: center;
@@ -274,9 +273,7 @@
     scene.add(mesh);
     return mesh;
   }
-
-  // Function to spawn the car (reset block position and rotation)
-  function spawnCar() {
+function spawnCar() {
     // Remove the previous block if it exists
     if (block) {
       scene.remove(block);
@@ -285,25 +282,35 @@
       block = null;
     }
 
-    // Calculate spawn position just in front of walkableBlock
-    let spawnOffset = new THREE.Vector3(0, 0, -2.5); // 2.5 units in front
-    spawnOffset.applyAxisAngle(new THREE.Vector3(0, 1, 0), walkableBlockRotation.y);
-    let spawnPos = walkableBlockPosition.clone().add(spawnOffset);
+    // Calculate spawn position 4 units to the left using walkableBlock's local left vector
+    let left = new THREE.Vector3(1, 0, 0);
+    left.applyQuaternion(walkableBlock.quaternion);
+    left.y = 0;
+    left.normalize();
+    let spawnPos = walkableBlock.position.clone().add(left.multiplyScalar(4));
 
+    // Use walkableBlock's rotation for the car block
     block = createBlock(spawnPos.x, spawnPos.y, spawnPos.z, 2.25, 1.25, 4, 0xff00ff);
     if (block) {
-      // Reset position and rotation
-      blockPosition.set(spawnPos.x, spawnPos.y, spawnPos.z);
-      blockRotation.set(0, walkableBlockRotation.y, 0); // Match facing direction
-      targetBlockRotation.set(0, walkableBlockRotation.y, 0);
+      blockPosition.copy(spawnPos);
+      block.quaternion.copy(walkableBlock.quaternion); // exact rotation match
+      blockRotation.set(
+        walkableBlock.rotation.x,
+        walkableBlock.rotation.y += Math.PI,
+        walkableBlock.rotation.z
+      );
+      targetBlockRotation.set(
+        walkableBlock.rotation.x,
+        walkableBlock.rotation.y,
+        walkableBlock.rotation.z
+      );
       velocity = 0;
       mph = 0;
-      gearMode = "neutral"; // Reset gear mode to neutral
-      // Optionally, hide the car picker UI after picking
+      gearMode = "neutral";
       const carPicker = document.getElementById('carPicker');
       if (carPicker) carPicker.style.display = 'none';
     }
-  }
+}
 
 function checkBlockContact() {
   if (!walkableBlock || !block) {
@@ -403,6 +410,7 @@ function checkBlockContact() {
 
     // --- SPAWN WALKABLE BLOCK ON LOAD ---
     walkableBlock = createBlock(0, 1.00125, 0, 1, 2, 1, 0x00ff00);
+    alignCameraToForward(walkableBlock);
 
     const light = new THREE.DirectionalLight(0xffffff, 1);
     light.position.set(2, 5, 2);
@@ -419,13 +427,106 @@ function checkBlockContact() {
 
 function updateWalkableBlock() {
   if (!walkableBlock) return;
-  // Move in world axes (no lerp, just direct movement)
-  if (walkKeys["KeyW"]) walkableBlockPosition.z -= walkableBlockSpeed;
-  if (walkKeys["KeyS"]) walkableBlockPosition.z += walkableBlockSpeed;
-  if (walkKeys["KeyA"]) walkableBlockPosition.x -= walkableBlockSpeed;
-  if (walkKeys["KeyD"]) walkableBlockPosition.x += walkableBlockSpeed;
+
+  // Calculate camera's forward and right vectors (projected onto XZ plane)
+  const camForward = new THREE.Vector3();
+  camera.getWorldDirection(camForward);
+  camForward.y = 0;
+  camForward.normalize();
+
+  const camRight = new THREE.Vector3();
+  camRight.crossVectors(camForward, new THREE.Vector3(0, 1, 0)).normalize();
+
+  // Move relative to camera orientation
+  let move = new THREE.Vector3();
+  if (walkKeys["KeyW"]) move.add(camForward);
+  if (walkKeys["KeyS"]) move.sub(camForward);
+  if (walkKeys["KeyA"]) move.sub(camRight);
+  if (walkKeys["KeyD"]) move.add(camRight);
+
+  if (move.lengthSq() > 0) {
+    move.normalize().multiplyScalar(walkableBlockSpeed);
+    walkableBlockPosition.add(move);
+  }
+
   walkableBlock.position.copy(walkableBlockPosition);
+
+  // --- Make walkableBlock rotate to face the same direction as the camera ---
+  // Get the camera's yaw (rotation around Y axis)
+  const yaw = Math.atan2(camForward.x, camForward.z);
+  walkableBlock.rotation.set(0, yaw, 0);
 }
+
+// --- ORBIT CAMERA LOGIC ---
+let orbitRadius = 10;
+let orbitTheta = 0; // Will be set dynamically to match local forward
+let orbitPhi = Math.PI / 3;
+let isOrbitDragging = false;
+let lastOrbitX = 0, lastOrbitY = 0;
+
+function alignCameraToForward(mesh) {
+  // Get mesh's world forward vector (Z-)
+  const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(mesh.quaternion);
+  // Project onto XZ plane
+  forward.y = 0;
+  forward.normalize();
+  // Calculate yaw angle (theta) so camera starts BEHIND the mesh
+  orbitTheta = Math.atan2(forward.x, forward.z);
+}
+
+function updateOrbitCamera(target) {
+  // Clamp phi to avoid flipping
+  const eps = 0.01;
+  orbitPhi = Math.max(eps, Math.min(Math.PI - eps, orbitPhi));
+
+  // Camera offset in spherical coordinates
+  const offset = new THREE.Vector3(
+    orbitRadius * Math.sin(orbitPhi) * Math.sin(orbitTheta),
+    orbitRadius * Math.cos(orbitPhi),
+    orbitRadius * Math.sin(orbitPhi) * Math.cos(orbitTheta)
+  );
+
+  camera.position.x = target.x + offset.x;
+  camera.position.y = target.y + offset.y;
+  camera.position.z = target.z + offset.z;
+  camera.lookAt(target.x, target.y, target.z);
+}
+
+function onOrbitPointerMove(event) {
+  if (!isOrbitDragging) return;
+  const deltaX = event.clientX - lastOrbitX;
+  const deltaY = event.clientY - lastOrbitY;
+  lastOrbitX = event.clientX;
+  lastOrbitY = event.clientY;
+  // Reverse left/right direction, 0.4x sensitivity
+  orbitTheta -= deltaX * 0.002;
+  orbitPhi -= deltaY * 0.002;
+}
+
+function onOrbitPointerDown(event) {
+  isOrbitDragging = true;
+  lastOrbitX = event.clientX;
+  lastOrbitY = event.clientY;
+}
+
+function onOrbitPointerUp() {
+  isOrbitDragging = false;
+}
+
+// Mouse wheel for zoom
+let targetOrbitRadius = orbitRadius;
+
+function onOrbitWheel(event) {
+  targetOrbitRadius += event.deltaY * 0.001 * orbitRadius; // Adjust zoom sensitivity
+  targetOrbitRadius = Math.max(5, Math.min(targetOrbitRadius, 35));
+}
+
+// Attach orbit camera controls to renderer dom
+document.addEventListener('pointerdown', onOrbitPointerDown);
+document.addEventListener('pointermove', onOrbitPointerMove);
+document.addEventListener('pointerup', onOrbitPointerUp);
+document.addEventListener('pointerleave', onOrbitPointerUp);
+document.addEventListener('wheel', onOrbitWheel);
 
   function getAccelerationForSpeed(speed) {
     const accelMap = [
@@ -648,7 +749,7 @@ function updateWalkableBlock() {
   let previousVelocity = 0;
   let tiltAmount = 0; // current tilt
   let tiltStrength = 0.025; // how fast tilt changes
-  let maxTiltAngle = 1.5; // max degrees tilt forward/back
+  let maxTiltAngle = -1.5; // max degrees tilt forward/back
 
   function updateBlock() {
     if (!block) return;
@@ -798,38 +899,39 @@ function updateWalkableBlock() {
     }
   }
 
-  function animate() {
-    requestAnimationFrame(animate);
+let lastBlockBeingUsed = false;
 
-    updateWalkableBlock();
-    checkBlockContact();
+function animate() {
+  requestAnimationFrame(animate);
 
-    // --- CAMERA FOLLOWS WALKABLE BLOCK AT ALL TIMES ---
-    if (walkableBlock) {
-    const offset = new THREE.Vector3(0, 3, 7.5);
-    offset.applyAxisAngle(new THREE.Vector3(0, 1, 0), walkableBlockRotation.y);
-    camera.position.copy(walkableBlock.position).add(offset);
-    camera.lookAt(walkableBlock.position);
-    camera.fov = 80;
+  updateWalkableBlock();
+  checkBlockContact();
+
+  // --- ORBIT CAMERA FOLLOWS BLOCK OR WALKABLE BLOCK ---
+  let target = walkableBlock ? walkableBlock.position : new THREE.Vector3(0, 0, 0);
+
+  // Lock camera to local forward of block or walkableBlock when switching
+  if (block && blockBeingUsed) {
+    if (!lastBlockBeingUsed) {
+      alignCameraToForward(block);
     }
-
-    if (block && blockBeingUsed) {
-    const offset = new THREE.Vector3(0, 3, 7.5);
-    offset.applyAxisAngle(new THREE.Vector3(0, 1, 0), blockRotation.y);
-    camera.position.copy(block.position).add(offset);
-    camera.lookAt(block.position);
-    camera.fov = THREE.MathUtils.lerp(camera.fov, targetFov, fovSpeed);
-
+    target = block.position;
     block.position.y = 1.125;
     blockRotation.lerp(targetBlockRotation, 0.1);
     block.position.lerp(blockPosition, 0.1);
     block.rotation.set(blockRotation.x, blockRotation.y, blockRotation.z);
-    }
-    
-    camera.updateProjectionMatrix();
-
-    renderer.render(scene, camera);
+  } else if (walkableBlock && lastBlockBeingUsed) {
+    alignCameraToForward(walkableBlock);
   }
+  lastBlockBeingUsed = !!blockBeingUsed;
+
+  orbitRadius += (targetOrbitRadius - orbitRadius) * 0.25;
+
+  updateOrbitCamera(target);
+
+  camera.updateProjectionMatrix();
+  renderer.render(scene, camera);
+}
 
   function onWindowResize() {
     camera.aspect = window.innerWidth / window.innerHeight;
