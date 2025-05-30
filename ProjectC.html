@@ -52,13 +52,29 @@
       left: 20px;
       padding: 10px 16px;
       border-radius: 12px;
-      font-family: monospace;
       font-size: 18px;
       box-shadow: 0 0 10px rgba(0, 0, 0, 0.4);
       background: rgba(0, 0, 0, 0.6);
       color: white;
       z-index: 10;
       display: none;
+    }
+
+    #displayMessage {
+      position: fixed;
+      left: 50%;
+      transform: translateX(-50%);
+      bottom: 20%;
+      padding: 10px 16px;
+      border-radius: 12px;
+      font-size: 18px;
+      box-shadow: 0 0 10px rgba(0, 0, 0, 0.4);
+      background: rgba(0, 0, 0, 0.6);
+      color: white;
+      z-index: 10;
+      display: none;
+      opacity: 1;
+      transition: opacity 1.5s;
     }
 
     #sidebar {
@@ -144,12 +160,14 @@
     body {
       margin: 0;
       overflow: hidden;
+      font-family: 'Poppins', 'Aptos', Arial, sans-serif;
     }
 
     canvas {
       display: block;
     }
   </style>
+  <link href="https://fonts.googleapis.com/css?family=Poppins:400&display=swap" rel="stylesheet">
 </head>
 <body>
 <!-- Game Title and Start Button -->
@@ -218,10 +236,33 @@
     document.getElementById('startButton').onclick = startGame;
     document.getElementById('toggleCarPickerBtn').addEventListener('click', toggleCarPicker);
 
-    // Add event listener to gridItem1 to spawn the car
+    let displayMessageTimeout = null;
+
     document.getElementById('gridItem1').addEventListener('click', function() {
+      const displayMessage = document.getElementById("displayMessage");
+      if (block && blockBeingUsed) {
+        displayMessage.textContent = "You already in a car! Try exiting first.";
+        displayMessage.style.display = "grid";
+        void displayMessage.offsetWidth; // Force reflow
+        displayMessage.style.opacity = "1";
+        // Clear any previous timeout
+        if (displayMessageTimeout) clearTimeout(displayMessageTimeout);
+        // Fade out after 5 seconds
+        displayMessageTimeout = setTimeout(() => {
+          displayMessage.style.opacity = "0";
+          setTimeout(() => {
+            if (displayMessage.style.opacity === "0") {
+              displayMessage.style.display = "none";
+              displayMessage.textContent = "";
+            }
+          }, 1500);
+        }, 3500);
+        return;
+      }
       spawnCar();
+      carPicker.style.display = 'none';
     });
+
     // Walkable block controls
     document.addEventListener("keydown", e => walkKeys[e.code] = true);
     document.addEventListener("keyup", e => delete walkKeys[e.code]);
@@ -290,10 +331,10 @@ function spawnCar() {
     let spawnPos = walkableBlock.position.clone().add(left.multiplyScalar(4));
 
     // Use walkableBlock's rotation for the car block
-    block = createBlock(spawnPos.x, spawnPos.y, spawnPos.z, 2.25, 1.25, 4, 0xff00ff);
+    block = createBlock(spawnPos.x, spawnPos.y - 0.2125, spawnPos.z, 2.25, 1.5, 4, 0xff00ff);
     if (block) {
+      
       blockPosition.copy(spawnPos);
-      block.quaternion.copy(walkableBlock.quaternion); // exact rotation match
       blockRotation.set(
         walkableBlock.rotation.x,
         walkableBlock.rotation.y += Math.PI,
@@ -307,10 +348,13 @@ function spawnCar() {
       velocity = 0;
       mph = 0;
       gearMode = "neutral";
+      blockEnterCount = 0; // Reset block enter count on spawn
       const carPicker = document.getElementById('carPicker');
       if (carPicker) carPicker.style.display = 'none';
     }
 }
+
+let blockEnterCount = 0;
 
 function checkBlockContact() {
   if (!walkableBlock || !block) {
@@ -335,6 +379,7 @@ function checkBlockContact() {
     walkableBlock.position.copy(block.position);
     blockBeingUsed = true;
     spaceHeldStart = null;
+    blockEnterCount++; // Increment the counter each time block is entered
   }
 
   if (blockBeingUsed) {
@@ -384,8 +429,8 @@ function checkBlockContact() {
     ground.position.y = -0.03125;
     scene.add(ground);
 
-    const roadGeometry = new THREE.PlaneGeometry(16, 10000);
-    const roadMaterial = new THREE.MeshPhongMaterial({ color: 0xaaaaaa, side: THREE.DoubleSide });
+    const roadGeometry = new THREE.PlaneGeometry(12, 10000);
+    const roadMaterial = new THREE.MeshPhysicalMaterial({ color: 0x333333, side: THREE.DoubleSide, roughness: 1 });
     const road = new THREE.Mesh(roadGeometry, roadMaterial);
     road.rotation.x = -Math.PI / 2;
     road.position.y = 0.03125;
@@ -405,8 +450,8 @@ function checkBlockContact() {
     scene.add(line, line2);
 
     // Side blocks
-    createBlock(16, 3.00125, 0, 6, 6, 10000, 0x0000ff);
-    createBlock(-16, 3.00125, 0, 6, 6, 10000, 0x0000ff);
+    createBlock(14, 3.00125, 0, 6, 4, 10000, 0x0000ff);
+    createBlock(-14, 3.00125, 0, 6, 4, 10000, 0x0000ff);
 
     // --- SPAWN WALKABLE BLOCK ON LOAD ---
     walkableBlock = createBlock(0, 1.00125, 0, 1, 2, 1, 0x00ff00);
@@ -419,6 +464,28 @@ function checkBlockContact() {
     renderer = new THREE.WebGLRenderer();
     renderer.setSize(window.innerWidth, window.innerHeight);
     document.body.appendChild(renderer.domElement);
+
+    // After creating your renderer and light, add these lines:
+
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap; // Softer, more realistic shadows
+
+// For your light:
+light.castShadow = true;
+light.shadow.bias = -0.001; // Helps reduce shadow acne
+light.shadow.mapSize.width = 1024;
+light.shadow.mapSize.height = 1024;
+
+// Make the ground receive shadows and blocks cast shadows:
+ground.receiveShadow = true;
+if (walkableBlock) walkableBlock.castShadow = true;
+if (block) block.castShadow = true;
+
+// Make shadows less dark (lighter/softer):
+renderer.shadowMap.autoUpdate = true;
+// Optionally, use a lighter ambient light to brighten shadowed areas:
+const ambient = new THREE.AmbientLight(0xffffff, 0.35); // Soft white light
+scene.add(ambient);
 
     window.addEventListener("resize", onWindowResize);
     document.addEventListener("keydown", e => keys[e.code] = true);
@@ -465,14 +532,13 @@ let isOrbitDragging = false;
 let lastOrbitX = 0, lastOrbitY = 0;
 
 function alignCameraToForward(mesh) {
-  // Get mesh's world forward vector (Z-)
-  const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(mesh.quaternion);
-  // Project onto XZ plane
-  forward.y = 0;
-  forward.normalize();
-  // Calculate yaw angle (theta) so camera starts BEHIND the mesh
-  orbitTheta = Math.atan2(forward.x, forward.z);
+  if (mesh === walkableBlock) {
+    orbitTheta = mesh.rotation.y + Math.PI; // Look from the front
+  } else if (mesh === block && blockEnterCount > 1) {
+    orbitTheta = mesh.rotation.y; // Normal for car block
+  }
 }
+
 
 function updateOrbitCamera(target) {
   // Clamp phi to avoid flipping
@@ -516,9 +582,24 @@ function onOrbitPointerUp() {
 // Mouse wheel for zoom
 let targetOrbitRadius = orbitRadius;
 
+let firstPerson = false; // Track if in first-person mode
+
 function onOrbitWheel(event) {
   targetOrbitRadius += event.deltaY * 0.001 * orbitRadius; // Adjust zoom sensitivity
   targetOrbitRadius = Math.max(5, Math.min(targetOrbitRadius, 35));
+  if (keys["v"] && block && blockBeingUsed && firstPerson === false) {
+    // copilot, make it so that the camera locks into max zoom when v is pressed
+    targetOrbitRadius = 0;
+    isOrbitDragging = false;
+    targetOrbitRadius = Math.max(0, Math.min(targetOrbitRadius, 0));
+    firstPerson = true;
+  } else if (keys["v"] && block && blockBeingUsed && firstPerson === true) {
+    // copilot, make it so that the camera unlocks when v is pressed again
+    targetOrbitRadius = 10;
+    isOrbitDragging = true;
+    targetOrbitRadius = Math.max(5, Math.min(targetOrbitRadius, 35));
+    firstPerson = false;
+  }
 }
 
 // Attach orbit camera controls to renderer dom
@@ -759,61 +840,6 @@ document.addEventListener('wheel', onOrbitWheel);
     const toggleReverseOff = keys["KeyE"];
     const left = keys["KeyA"];
     const right = keys["KeyD"];
-    const tiltForward = keys["KeyT"];
-
-    if (toggleReverseOn && !qPressedLastFrame && blockBeingUsed) {
-      if (gearMode === "drive") {
-        gearMode = "neutral";
-      } else if (gearMode === "neutral" && velocity <= 0) {
-        gearMode = "reverse";
-      }
-    }
-
-    if (toggleReverseOff && !ePressedLastFrame && blockBeingUsed) {
-      if (gearMode === "reverse") {
-        gearMode = "neutral";
-      } else if (gearMode === "neutral" && velocity >= 0) {
-        gearMode = "drive";
-      }
-    }
-
-    if (!blockBeingUsed) {
-      // Reset gear mode to neutral if not using the block
-      gearMode = "neutral";
-    }
-
-    // Update key states
-    qPressedLastFrame = toggleReverseOn;
-    ePressedLastFrame = toggleReverseOff;
-
-    // Input direction is always 1 when W is held
-    let inputDir = forward ? 1 : 0;
-
-    if (gearMode === "reverse") inputDir *= -1;
-    if (gearMode === "neutral") inputDir = 0;
-
-    // Apply movement logic
-    if (inputDir !== 0 ) {
-      if ((velocity >= 0.00125 && inputDir > 0) || (velocity <= -0.00125 && inputDir < 0) || velocity === 0) {
-        const accel = getAccelerationForSpeed(velocity);
-        velocity += accel * inputDir;
-      }
-    } else if (!((velocity >= 0.00125 && inputDir > 0) || (velocity <= -0.00125 && inputDir < 0) || velocity === 0) && inputDir === 0 && backward) {
-      const brake = getBrakeForSpeed(velocity);
-      velocity -= brake * Math.sign(velocity) * 2;
-      if (Math.abs(velocity) < 0.00125) velocity = 0;
-    } else if (!((velocity >= 0.00125 && inputDir > 0) || (velocity <= -0.00125 && inputDir < 0) || velocity === 0)) {
-      const brake = getBrakeForSpeed(velocity);
-      velocity -= brake * Math.sign(velocity) * 0.7;
-      if (Math.abs(velocity) < 0.00125) velocity = 0;
-    }
-    if (gearMode === "reverse") {
-      velocity = THREE.MathUtils.clamp(velocity, -0.2533, maxSpeed);
-    } else if (gearMode === "drive") {
-      velocity = THREE.MathUtils.clamp(velocity, 0, 2);
-    } else {
-      velocity = THREE.MathUtils.clamp(velocity, -maxSpeed, maxSpeed); // Still clamp in neutral
-    }
 
     mph = Math.abs(velocity) * 51.5;
     // Update max roll based on the current speed
@@ -822,18 +848,17 @@ document.addEventListener('wheel', onOrbitWheel);
     // Get dynamic rotation speed based on the block's velocity
     let rotationSpeed = getRotationSpeedForSpeed(velocity);
 
-    // Set target roll based on key input (A/D)
-    if (keys["KeyA"]) {
-      targetRollAmount = -maxRoll;
-    } else if (keys["KeyD"]) {
-      targetRollAmount = maxRoll;
-    } else {
-      targetRollAmount = 0; // Neutral when no input
-    }
+let steeringInput = 0;
+if (left) steeringInput += 1;
+if (right) steeringInput -= 1;
 
-    // Smoothly interpolate the actual roll amount toward the target
-    rollAmount = THREE.MathUtils.lerp(rollAmount, targetRollAmount, 0.1);
-    targetBlockRotation.z = THREE.MathUtils.degToRad(rollAmount);
+// Use the roll value from your map, scaled by steering direction
+let rollTarget = steeringInput * maxRoll;
+
+// Smoothly interpolate the actual roll amount toward the target
+rollAmount = THREE.MathUtils.lerp(rollAmount, rollTarget, 0.1);
+
+targetBlockRotation.z = THREE.MathUtils.degToRad(rollAmount);
 
     // --- Calculate acceleration (change in velocity) ---
     let accelSpeed = Math.abs(velocity) - Math.abs(previousVelocity);
@@ -852,7 +877,7 @@ document.addEventListener('wheel', onOrbitWheel);
     // Calculate target tilt angle in radians
     let targetTiltRad = THREE.MathUtils.degToRad(tiltDirection * maxTiltAngle);
 
-    // Smoothly lerp tiltAmount toward target tilt
+    // Smoothly lerp tiltAmount toward target tilted
     tiltAmount = THREE.MathUtils.lerp(tiltAmount, targetTiltRad, tiltStrength);
 
     // Apply tilt to block's X rotation (pitch)
@@ -861,27 +886,85 @@ document.addEventListener('wheel', onOrbitWheel);
     // Store current velocity for next frame's comparison
     previousVelocity = velocity;
 
-    // Rotate the block based on A and D key input
-    if (keys["KeyA"]) {
-      if (velocity >= 0) {
-        targetBlockRotation.y += rotationSpeed; // Rotate clockwise on A
-      } else if (velocity <= 0) {
-        targetBlockRotation.y -= rotationSpeed; // Rotate counterclockwise on A
-      }
+if (blockBeingUsed) {
+  // --- Gear switching ---
+  if (toggleReverseOn && !qPressedLastFrame) {
+    if (gearMode === "drive") {
+      gearMode = "neutral";
+    } else if (gearMode === "neutral" && velocity <= 0) {
+      gearMode = "reverse";
     }
-    if (keys["KeyD"]) {
-      if (velocity >= 0) {
-        targetBlockRotation.y -= rotationSpeed; // Rotate counterclockwise on D
-      } else if (velocity <= 0) {
-        targetBlockRotation.y += rotationSpeed; // Rotate clockwise on D
-      }
+  }
+  if (toggleReverseOff && !ePressedLastFrame) {
+    if (gearMode === "reverse") {
+      gearMode = "neutral";
+    } else if (gearMode === "neutral" && velocity >= 0) {
+      gearMode = "drive";
     }
+  }
 
-    // Update position of the block based on its velocity
-    const direction = new THREE.Vector3(0, 0, -1);  // Default forward direction
-    direction.applyAxisAngle(new THREE.Vector3(0, 1, 0), targetBlockRotation.y);  // Rotate direction based on current yaw
-    direction.multiplyScalar(velocity);
-    blockPosition.add(direction);
+  // --- Input direction ---
+  let inputDir = forward ? 1 : 0;
+  if (gearMode === "reverse") inputDir *= -1;
+  if (gearMode === "neutral") inputDir = 0;
+
+  // --- Acceleration/braking ---
+  if (inputDir !== 0 ) {
+    if ((velocity >= 0.00125 && inputDir > 0) || (velocity <= -0.00125 && inputDir < 0) || velocity === 0) {
+      const accel = getAccelerationForSpeed(velocity);
+      velocity += accel * inputDir;
+    }
+  } else if (!((velocity >= 0.00125 && inputDir > 0) || (velocity <= -0.00125 && inputDir < 0) || velocity === 0) && inputDir === 0 && backward) {
+    const brake = getBrakeForSpeed(velocity);
+    velocity -= brake * Math.sign(velocity) * 2;
+    if (Math.abs(velocity) < 0.00125) velocity = 0;
+  } else if (!((velocity >= 0.00125 && inputDir > 0) || (velocity <= -0.00125 && inputDir < 0) || velocity === 0)) {
+    const brake = getBrakeForSpeed(velocity);
+    velocity -= brake * Math.sign(velocity) * 0.7;
+    if (Math.abs(velocity) < 0.00125) velocity = 0;
+  }
+
+  // --- Velocity clamping ---
+  if (gearMode === "reverse") {
+    velocity = THREE.MathUtils.clamp(velocity, -0.2533, maxSpeed);
+  } else if (gearMode === "drive") {
+    velocity = THREE.MathUtils.clamp(velocity, 0, 2);
+  } else {
+    velocity = THREE.MathUtils.clamp(velocity, -maxSpeed, maxSpeed);
+  }
+
+  // --- Steering (A/D) ---
+  if (keys["KeyA"]) {
+    if (velocity >= 0) {
+      targetBlockRotation.y += rotationSpeed;
+    } else if (velocity <= 0) {
+      targetBlockRotation.y -= rotationSpeed;
+    }
+  }
+  if (keys["KeyD"]) {
+    if (velocity >= 0) {
+      targetBlockRotation.y -= rotationSpeed;
+    } else if (velocity <= 0) {
+      targetBlockRotation.y += rotationSpeed;
+    }
+  }
+
+  // --- Move block ---
+  const direction = new THREE.Vector3(0, 0, -1);
+  direction.applyAxisAngle(new THREE.Vector3(0, 1, 0), targetBlockRotation.y);
+  direction.multiplyScalar(velocity);
+  blockPosition.add(direction);
+} else {
+  // --- Coast: move in last direction, apply friction ---
+  const direction = new THREE.Vector3(0, 0, -1);
+  direction.applyAxisAngle(new THREE.Vector3(0, 1, 0), targetBlockRotation.y);
+  direction.multiplyScalar(velocity);
+  blockPosition.add(direction);
+
+  // Apply friction to gradually slow down
+  velocity *= 0.98;
+  if (Math.abs(velocity) < 0.001) velocity = 0;
+}
 
     // Calculate and apply FOV based on speed
     targetFov = getFovForSpeed(velocity);
@@ -892,7 +975,7 @@ document.addEventListener('wheel', onOrbitWheel);
 
     if (blockBeingUsed) {
       document.getElementById("speedDial").textContent =
-      `Speed: ${velocity.toFixed(2)} (${mph.toFixed(0)} mph) | Gear: ${gearMode}`;
+      `Speed: ${Math.abs(velocity.toFixed(2))} (${Math.abs(mph.toFixed(0))} mph) | Gear: ${gearMode}`;
       document.getElementById("speedDial").style.display = "grid"; // Hide speed dial if not using the block
     } else {
       document.getElementById("speedDial").style.display = "none"; // Hide speed dial if not using the block
@@ -911,18 +994,42 @@ function animate() {
   let target = walkableBlock ? walkableBlock.position : new THREE.Vector3(0, 0, 0);
 
   // Lock camera to local forward of block or walkableBlock when switching
-  if (block && blockBeingUsed) {
-    if (!lastBlockBeingUsed) {
-      alignCameraToForward(block);
-    }
-    target = block.position;
-    block.position.y = 1.125;
-    blockRotation.lerp(targetBlockRotation, 0.1);
-    block.position.lerp(blockPosition, 0.1);
-    block.rotation.set(blockRotation.x, blockRotation.y, blockRotation.z);
-  } else if (walkableBlock && lastBlockBeingUsed) {
+if (block) {
+  if (blockBeingUsed && !lastBlockBeingUsed) {
+    alignCameraToForward(block);
+  } else if (!blockBeingUsed && lastBlockBeingUsed && walkableBlock) {
     alignCameraToForward(walkableBlock);
   }
+  // Set camera target based on whether player is in the car
+  if (blockBeingUsed) {
+    target = block.position;
+  } else if (walkableBlock) {
+    target = walkableBlock.position;
+  }
+  block.position.lerp(blockPosition, 0.1);
+
+  // Only update rotation if player is in the car
+if (blockBeingUsed) {
+  blockRotation.lerp(targetBlockRotation, 0.1);
+
+  // Compose rotation using quaternions in Z (roll), X (pitch), Y (yaw) order
+  const pitchQuat = new THREE.Quaternion();
+  pitchQuat.setFromAxisAngle(new THREE.Vector3(-1, 0, 0), blockRotation.x);
+
+  const yawQuat = new THREE.Quaternion();
+  yawQuat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), blockRotation.y);
+
+  const rollQuat = new THREE.Quaternion();
+  rollQuat.setFromAxisAngle(new THREE.Vector3(0, 0, -1), blockRotation.z);
+
+  // Compose: yaw * roll * pitch (Y * Z * X)
+  const finalQuat = new THREE.Quaternion();
+  finalQuat.multiplyQuaternions(yawQuat, rollQuat); // yaw * roll
+  finalQuat.multiply(pitchQuat); // (yaw * roll) * pitch
+
+  block.quaternion.copy(finalQuat);
+}
+}
   lastBlockBeingUsed = !!blockBeingUsed;
 
   orbitRadius += (targetOrbitRadius - orbitRadius) * 0.25;
@@ -945,6 +1052,7 @@ function animate() {
 </script>
 
 <div id="speedDial"></div>
+<div id="displayMessage"></div>
 
 </body>
 </html>
