@@ -192,6 +192,7 @@
     <div class="gridItem"></div>
   </div>
 </div>
+<script src="https://cdn.jsdelivr.net/npm/cannon@0.6.2/build/cannon.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.150.1/build/three.min.js"></script>
 <script>
   // Prevent the default context menu from appearing on right-click
@@ -289,7 +290,6 @@
   const cameraMoveSpeed = 0.025;
 
   let walkableBlock;
-  let walkableBlockPosition = new THREE.Vector3(0, 1.00125, 0);
   let walkableBlockRotation = new THREE.Vector3(0, 0, 0);
   let walkableBlockSpeed = 0.12;
   const walkKeys = {};
@@ -306,96 +306,278 @@
   const fovBoostSpeed = 0.0003625;
   const keys = {};
 
-  function createBlock(x, y, z, width, height, depth, color) {
-    const geometry = new THREE.BoxGeometry(width, height, depth);
-    const material = new THREE.MeshPhongMaterial({ color: color });
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.position.set(x, y, z);
-    scene.add(mesh);
-    return mesh;
+const world = new CANNON.World();
+world.gravity.set(0, -9.82, 0); // Standard earth gravity
+
+const groundMaterial = new CANNON.Material("groundMaterial");
+const blockMaterial = new CANNON.Material("blockMaterial");
+
+// Contact material: controls friction and restitution between block and ground
+const contactMaterial = new CANNON.ContactMaterial(
+  groundMaterial,
+  blockMaterial,
+  {
+    friction: 0,
+    restitution: 0 // No bounce
   }
+);
+world.addContactMaterial(contactMaterial);
+
+// Create a static ground plane in Cannon.js
+const groundBody = new CANNON.Body({
+  mass: 0,
+  shape: new CANNON.Plane(),
+  position: new CANNON.Vec3(0, 0, 0),
+  material: groundMaterial,
+  collisionFilterGroup: 2,
+  collisionFilterMask: 1
+});
+groundBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
+world.addBody(groundBody);
+
+function createBlock(x, y, z, width, height, depth, color, mass = 1, collidability = false) {
+  // THREE.js mesh
+  const geometry = new THREE.BoxGeometry(width, height, depth);
+  const material = new THREE.MeshPhongMaterial({ color: color });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.position.set(x, y, z);
+  scene.add(mesh);
+
+  // Cannon.js body
+  const shape = new CANNON.Box(new CANNON.Vec3(width/2, height/2, depth/2));
+  const body = new CANNON.Body({
+    mass: mass, // 0 for static, 1 for dynamic
+    position: new CANNON.Vec3(x, y, z),
+    shape: shape,
+    material: blockMaterial
+  });
+
+  // --- DISABLE COLLISION BETWEEN BLOCKS (EXCEPT GROUND) ---
+  // Only enable collision with the ground (collisionFilterGroup = 1, collisionFilterMask = 2 for ground)
+  // We'll use group 1 for blocks, group 2 for ground
+  // For ground:
+  //   collisionFilterGroup: 2, collisionFilterMask: 1
+  // For blocks:
+  //   collisionFilterGroup: 1, collisionFilterMask: 2
+  if (mass > 0) {
+    body.collisionFilterGroup = 1;
+    body.collisionFilterMask = 2;
+  } else {
+    // static blocks (walls) - still only collide with ground
+    body.collisionFilterGroup = 1;
+    body.collisionFilterMask = 2;
+  }
+
+  world.addBody(body);
+
+  mesh.userData.body = body; // Link mesh to body
+  mesh.userData.collidability = collidability; // Store collidability flag
+  body.collidability = collidability; // Also store on body for easy access
+
+  return mesh;
+}
+
+function syncPhysics() {
+  // Sync block
+  if (block && block.userData.body) {
+    block.position.copy(block.userData.body.position);
+    block.quaternion.copy(block.userData.body.quaternion);
+  }
+  // Sync walkableBlock
+  if (walkableBlock && walkableBlock.userData.body) {
+    walkableBlock.position.copy(walkableBlock.userData.body.position);
+    walkableBlock.quaternion.copy(walkableBlock.userData.body.quaternion);
+    // --- Force walkableBlock to face camera's yaw after physics sync ---
+    walkableBlock.rotation.set(0, orbitTheta, 0);
+  }
+}
+
 function spawnCar() {
-    // Remove the previous block if it exists
-    if (block) {
-      scene.remove(block);
-      block.geometry.dispose();
-      block.material.dispose();
-      block = null;
+  if (block) {
+    scene.remove(block);
+    if (block.userData.body) world.removeBody(block.userData.body);
+    block.geometry.dispose();
+    block.material.dispose();
+    block = null;
+  }
+
+  let left = new THREE.Vector3(1, 0, 0);
+  left.applyQuaternion(walkableBlock.quaternion);
+  left.y = 0;
+  left.normalize();
+  let spawnPos = walkableBlock.position.clone().add(left.multiplyScalar(4));
+
+  block = createBlock(spawnPos.x, spawnPos.y - 0.2125, spawnPos.z, 2.25, 1.5, 4, 0xff00ff);
+  if (block) {
+    blockPosition.copy(spawnPos);
+
+    // Copy walkableBlock's rotation to block
+    block.rotation.copy(walkableBlock.rotation);
+    block.quaternion.copy(walkableBlock.quaternion);
+
+    // Set Cannon.js body quaternion to match walkableBlock
+    if (block.userData.body) {
+      block.userData.body.quaternion.copy(block.quaternion);
     }
 
-    // Calculate spawn position 4 units to the left using walkableBlock's local left vector
-    let left = new THREE.Vector3(1, 0, 0);
-    left.applyQuaternion(walkableBlock.quaternion);
-    left.y = 0;
-    left.normalize();
-    let spawnPos = walkableBlock.position.clone().add(left.multiplyScalar(4));
+    blockRotation.copy(walkableBlock.rotation);
+    targetBlockRotation.copy(walkableBlock.rotation);
 
-    // Use walkableBlock's rotation for the car block
-    block = createBlock(spawnPos.x, spawnPos.y - 0.2125, spawnPos.z, 2.25, 1.5, 4, 0xff00ff);
-    if (block) {
-      
-      blockPosition.copy(spawnPos);
-      blockRotation.set(
-        walkableBlock.rotation.x,
-        walkableBlock.rotation.y += Math.PI,
-        walkableBlock.rotation.z
-      );
-      targetBlockRotation.set(
-        walkableBlock.rotation.x,
-        walkableBlock.rotation.y,
-        walkableBlock.rotation.z
-      );
-      velocity = 0;
-      mph = 0;
-      gearMode = "neutral";
-      blockEnterCount = 0; // Reset block enter count on spawn
-      const carPicker = document.getElementById('carPicker');
-      if (carPicker) carPicker.style.display = 'none';
+    velocity = 0;
+    mph = 0;
+    gearMode = "neutral";
+    blockEnterCount = 0;
+    const carPicker = document.getElementById('carPicker');
+    if (carPicker) carPicker.style.display = 'none';
+
+    // --- Lock camera behind block if blockBeingUsed (but still allow pan) ---
+    if (block && blockBeingUsed) {
+      // Set orbitTheta so camera starts behind the block
+      alignCameraToForward(block);
     }
+  }
 }
 
 let blockEnterCount = 0;
 
+function isPointInsideMesh(point, mesh, threshold = 0.2) {
+  // Convert the point to mesh local space
+  const localPoint = point.clone();
+  mesh.worldToLocal(localPoint);
+
+  // Get geometry
+  const geometry = mesh.geometry;
+  if (!geometry.attributes.position) return false;
+
+  // For each triangle, check if the point is close to the triangle surface
+  const pos = geometry.attributes.position;
+  for (let i = 0; i < pos.count; i += 3) {
+    const a = new THREE.Vector3().fromBufferAttribute(pos, i);
+    const b = new THREE.Vector3().fromBufferAttribute(pos, i + 1);
+    const c = new THREE.Vector3().fromBufferAttribute(pos, i + 2);
+
+    // Compute closest point on triangle to localPoint
+    const closest = new THREE.Vector3();
+    closestPointToTriangle(localPoint, a, b, c, closest);
+
+    // If the distance is less than threshold, consider it a hit
+    if (localPoint.distanceTo(closest) < threshold) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Helper: Find closest point on triangle to a point
+function closestPointToTriangle(p, a, b, c, target) {
+  // Algorithm from Real-Time Collision Detection, Christer Ericson, 2005
+  const ab = b.clone().sub(a);
+  const ac = c.clone().sub(a);
+  const ap = p.clone().sub(a);
+
+  const d1 = ab.dot(ap);
+  const d2 = ac.dot(ap);
+
+  if (d1 <= 0 && d2 <= 0) {
+    target.copy(a);
+    return target;
+  }
+
+  const bp = p.clone().sub(b);
+  const d3 = ab.dot(bp);
+  const d4 = ac.dot(bp);
+
+  if (d3 >= 0 && d4 <= d3) {
+    target.copy(b);
+    return target;
+  }
+
+  const vc = d1 * d4 - d3 * d2;
+  if (vc <= 0 && d1 >= 0 && d3 <= 0) {
+    const v = d1 / (d1 - d3);
+    target.copy(a).add(ab.multiplyScalar(v));
+    return target;
+  }
+
+  const cp = p.clone().sub(c);
+  const d5 = ab.dot(cp);
+  const d6 = ac.dot(cp);
+
+  if (d6 >= 0 && d5 <= d6) {
+    target.copy(c);
+    return target;
+  }
+
+  const vb = d5 * d2 - d1 * d6;
+  if (vb <= 0 && d2 >= 0 && d6 <= 0) {
+    const w = d2 / (d2 - d6);
+    target.copy(a).add(ac.multiplyScalar(w));
+    return target;
+  }
+
+  const va = d3 * d6 - d5 * d4;
+  if (va <= 0 && (d4 - d3) >= 0 && (d5 - d6) >= 0) {
+    const w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+    target.copy(b).add(c.clone().sub(b).multiplyScalar(w));
+    return target;
+  }
+
+  // Inside face region
+  const denom = 1 / (va + vb + vc);
+  const v = vb * denom;
+  const w = vc * denom;
+  target.copy(a)
+    .add(ab.multiplyScalar(v))
+    .add(ac.multiplyScalar(w));
+  return target;
+}
+
+// Replace the collision check in checkBlockContact() with this:
 function checkBlockContact() {
   if (!walkableBlock || !block) {
     blockBeingUsed = false;
     return;
   }
-  // Simple AABB collision check
-  const a = walkableBlock;
-  const b = block;
-  const aPos = a.position, bPos = b.position;
-  const aSize = { x: a.geometry.parameters.width, y: a.geometry.parameters.height, z: a.geometry.parameters.depth };
-  const bSize = { x: b.geometry.parameters.width, y: b.geometry.parameters.height, z: b.geometry.parameters.depth };
 
-  const collision =
-    Math.abs(aPos.x - bPos.x) < (aSize.x / 2 + bSize.x / 2) &&
-    Math.abs(aPos.y - bPos.y) < (aSize.y / 2 + bSize.y / 2) &&
-    Math.abs(aPos.z - bPos.z) < (aSize.z / 2 + bSize.z / 2);
+  // Use precise mesh-based detection for both meshes
+  const threshold = 0.6; // Adjust as needed for your models
+
+  // Check if walkableBlock's center is inside block's mesh
+  const walkableInBlock = isPointInsideMesh(walkableBlock.position, block, threshold);
+
+  // Check if block's center is inside walkableBlock's mesh
+  const blockInWalkable = isPointInsideMesh(block.position, walkableBlock, threshold);
+
+  const collision = walkableInBlock || blockInWalkable;
 
   if (collision && !blockBeingUsed) {
-    // Lock walkableBlock to the center of block
-    walkableBlockPosition.copy(block.position);
     walkableBlock.position.copy(block.position);
     blockBeingUsed = true;
     spaceHeldStart = null;
-    blockEnterCount++; // Increment the counter each time block is entered
+    blockEnterCount++;
   }
 
   if (blockBeingUsed) {
-    // Keep walkableBlock locked to block center
-    walkableBlockPosition.copy(block.position);
     walkableBlock.position.copy(block.position);
 
-    // Check for spacebar hold to eject
     if (walkKeys["Space"]) {
       if (!spaceHeldStart) spaceHeldStart = Date.now();
       if (Date.now() - spaceHeldStart >= spaceHeldTimeout) {
-        // Eject walkableBlock to the side of the block
-        const ejectOffset = new THREE.Vector3(2.5, 0, 0); // 2.5 units to the right
+        const ejectOffset = new THREE.Vector3(4, 0, 0);
         ejectOffset.applyAxisAngle(new THREE.Vector3(0, 1, 0), block.rotation.y);
-        walkableBlockPosition.copy(block.position).add(ejectOffset);
-        walkableBlock.position.copy(walkableBlockPosition);
+        if (walkableBlock.userData.body) {
+          walkableBlock.userData.body.position.copy(block.position);
+          walkableBlock.userData.body.position.vadd(
+            new CANNON.Vec3(ejectOffset.x, ejectOffset.y, ejectOffset.z),
+            walkableBlock.userData.body.position
+          );
+          walkableBlock.userData.body.velocity.set(0, 0, 0);
+
+          const q = new THREE.Quaternion();
+          q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), orbitTheta);
+          walkableBlock.userData.body.quaternion.copy(q);
+          walkableBlock.quaternion.copy(q);
+        }
         blockBeingUsed = false;
         spaceHeldStart = null;
       }
@@ -407,12 +589,10 @@ function checkBlockContact() {
     blockBeingUsed = false;
   }
   if (blockBeingUsed) {
-  // Hide walkableBlock when inside block
-  walkableBlock.visible = false;
-} else {
-  // Show walkableBlock when not inside block
-  walkableBlock.visible = true;
-}
+    walkableBlock.visible = false;
+  } else {
+    walkableBlock.visible = true;
+  }
 }
 
   function init() {
@@ -423,7 +603,7 @@ function checkBlockContact() {
     scene.background = new THREE.Color(0x80c7ff);
 
     const groundGeometry = new THREE.PlaneGeometry(10000, 10000);
-    const groundMaterial = new THREE.MeshPhongMaterial({ color: 0xd9d9d9, side: THREE.DoubleSide });
+    const groundMaterial = new THREE.MeshPhysicalMaterial({ color: 0x4C7031, side: THREE.DoubleSide, roughness: 1 });
     const ground = new THREE.Mesh(groundGeometry, groundMaterial);
     ground.rotation.x = -Math.PI / 2;
     ground.position.y = -0.03125;
@@ -450,8 +630,39 @@ function checkBlockContact() {
     scene.add(line, line2);
 
     // Side blocks
-    createBlock(14, 3.00125, 0, 6, 4, 10000, 0x0000ff);
-    createBlock(-14, 3.00125, 0, 6, 4, 10000, 0x0000ff);
+    createBlock(16, 4, 0, 12, 8, 24, 0x0000ff, 0);
+    createBlock(16, 4, 32, 12, 8, 24, 0x0000ff, 0);
+    createBlock(16, 4, 64, 12, 8, 24, 0x0000ff, 0);
+    createBlock(16, 4, 96, 12, 8, 24, 0x0000ff, 0);
+    createBlock(16, 4, 128, 12, 8, 24, 0x0000ff, 0);
+    createBlock(16, 4, 160, 12, 8, 24, 0x0000ff, 0);
+    createBlock(16, 4, 192, 12, 8, 24, 0x0000ff, 0);
+    createBlock(16, 4, 224, 12, 8, 24, 0x0000ff, 0);
+    createBlock(16, 4, 256, 12, 8, 24, 0x0000ff, 0);
+    createBlock(16, 4, 288, 12, 8, 24, 0x0000ff, 0);
+    createBlock(16, 4, 320, 12, 8, 24, 0x0000ff, 0);
+    createBlock(16, 4, 352, 12, 8, 24, 0x0000ff, 0);
+    createBlock(16, 4, 384, 12, 8, 24, 0x0000ff, 0);
+    createBlock(16, 4, 416, 12, 8, 24, 0x0000ff, 0);
+    createBlock(16, 4, 448, 12, 8, 24, 0x0000ff, 0);
+    createBlock(16, 4, 480, 12, 8, 24, 0x0000ff, 0);
+
+    createBlock(-16, 4, 0, 12, 8, 24, 0x0000ff, 0);
+    createBlock(-16, 4, 96, 12, 8, 24, 0x0000ff, 0);
+    createBlock(-16, 4, 64, 12, 8, 24, 0x0000ff, 0);
+    createBlock(-16, 4, 32, 12, 8, 24, 0x0000ff, 0);
+    createBlock(-16, 4, 128, 12, 8, 24, 0x0000ff, 0);
+    createBlock(-16, 4, 160, 12, 8, 24, 0x0000ff, 0);
+    createBlock(-16, 4, 192, 12, 8, 24, 0x0000ff, 0);
+    createBlock(-16, 4, 224, 12, 8, 24, 0x0000ff, 0);
+    createBlock(-16, 4, 256, 12, 8, 24, 0x0000ff, 0);
+    createBlock(-16, 4, 288, 12, 8, 24, 0x0000ff, 0);
+    createBlock(-16, 4, 320, 12, 8, 24, 0x0000ff, 0);
+    createBlock(-16, 4, 352, 12, 8, 24, 0x0000ff, 0);
+    createBlock(-16, 4, 384, 12, 8, 24, 0x0000ff, 0);
+    createBlock(-16, 4, 416, 12, 8, 24, 0x0000ff, 0);
+    createBlock(-16, 4, 448, 12, 8, 24, 0x0000ff, 0);
+    createBlock(-16, 4, 480, 12, 8, 24, 0x0000ff, 0);
 
     // --- SPAWN WALKABLE BLOCK ON LOAD ---
     walkableBlock = createBlock(0, 1.00125, 0, 1, 2, 1, 0x00ff00);
@@ -492,6 +703,24 @@ scene.add(ambient);
     document.addEventListener("keyup", e => delete keys[e.code]);
   }
 
+  let vToggle = false;
+
+document.addEventListener('keydown', (e) => {
+  if (e.code === 'KeyV' && block && blockBeingUsed) {
+    vToggle = !vToggle;
+    if (vToggle) {
+      targetOrbitRadius = 1;
+      orbitRadius = 1;
+      // Lock camera angle straight forward (behind the car)
+      alignCameraToForward(block);
+      // Optionally, lock phi to a fixed value (e.g., Math.PI/3 for a slight top-down, or Math.PI/2 for level)
+      orbitPhi = Math.PI / 3;
+    } else {
+      targetOrbitRadius = 10; // Restore default orbit distance
+    }
+  }
+});
+
 function updateWalkableBlock() {
   if (!walkableBlock) return;
 
@@ -513,15 +742,18 @@ function updateWalkableBlock() {
 
   if (move.lengthSq() > 0) {
     move.normalize().multiplyScalar(walkableBlockSpeed);
-    walkableBlockPosition.add(move);
+
+    // --- Move the Cannon.js body, not just the mesh ---
+    if (walkableBlock.userData.body) {
+      walkableBlock.userData.body.position.x += move.x;
+      walkableBlock.userData.body.position.z += move.z;
+      walkableBlock.userData.body.velocity.x = 0;
+      walkableBlock.userData.body.velocity.z = 0;
+    }
   }
 
-  walkableBlock.position.copy(walkableBlockPosition);
-
-  // --- Make walkableBlock rotate to face the same direction as the camera ---
-  // Get the camera's yaw (rotation around Y axis)
-  const yaw = Math.atan2(camForward.x, camForward.z);
-  walkableBlock.rotation.set(0, yaw, 0);
+  // --- Make walkableBlock rotate to face the same direction as the orbit camera (panned yaw) ---
+  walkableBlock.rotation.set(0, orbitTheta, 0);
 }
 
 // --- ORBIT CAMERA LOGIC ---
@@ -532,15 +764,18 @@ let isOrbitDragging = false;
 let lastOrbitX = 0, lastOrbitY = 0;
 
 function alignCameraToForward(mesh) {
-  if (mesh === walkableBlock) {
-    orbitTheta = mesh.rotation.y + Math.PI; // Look from the front
-  } else if (mesh === block && blockEnterCount > 1) {
-    orbitTheta = mesh.rotation.y; // Normal for car block
-  }
+  const forward = new THREE.Vector3(0, 0, -1); // Local forward in mesh space
+  forward.applyQuaternion(mesh.quaternion); // Convert to world space
+  orbitTheta = Math.atan2(-forward.x, -forward.z); // Calculate theta from forward vector
 }
 
 
 function updateOrbitCamera(target) {
+  // If vToggle is active, lock camera angle straight behind the car
+  if (vToggle && block && blockBeingUsed) {
+    alignCameraToForward(block);
+    orbitPhi = Math.PI / 3; // Or Math.PI/2 for level, adjust as desired
+  }
   // Clamp phi to avoid flipping
   const eps = 0.01;
   orbitPhi = Math.max(eps, Math.min(Math.PI - eps, orbitPhi));
@@ -559,6 +794,7 @@ function updateOrbitCamera(target) {
 }
 
 function onOrbitPointerMove(event) {
+    if (vToggle) return; // Disable panning/dragging when V toggle is active
   if (!isOrbitDragging) return;
   const deltaX = event.clientX - lastOrbitX;
   const deltaY = event.clientY - lastOrbitY;
@@ -570,6 +806,7 @@ function onOrbitPointerMove(event) {
 }
 
 function onOrbitPointerDown(event) {
+    if (vToggle) return; // Disable panning/dragging when V toggle is active
   isOrbitDragging = true;
   lastOrbitX = event.clientX;
   lastOrbitY = event.clientY;
@@ -585,6 +822,7 @@ let targetOrbitRadius = orbitRadius;
 let firstPerson = false; // Track if in first-person mode
 
 function onOrbitWheel(event) {
+  if (vToggle) return;
   targetOrbitRadius += event.deltaY * 0.001 * orbitRadius; // Adjust zoom sensitivity
   targetOrbitRadius = Math.max(5, Math.min(targetOrbitRadius, 35));
   if (keys["v"] && block && blockBeingUsed && firstPerson === false) {
@@ -848,6 +1086,18 @@ document.addEventListener('wheel', onOrbitWheel);
     // Get dynamic rotation speed based on the block's velocity
     let rotationSpeed = getRotationSpeedForSpeed(velocity);
 
+    if (blockBeingUsed && block && block.userData.body) {
+  // Calculate direction vector
+  const direction = new THREE.Vector3(0, 0, -1);
+  direction.applyAxisAngle(new THREE.Vector3(0, 1, 0), targetBlockRotation.y);
+  direction.normalize();
+
+  // Set Cannon.js velocity (scale as needed)
+  block.userData.body.velocity.x = direction.x * velocity * 60;
+  block.userData.body.velocity.y = block.userData.body.velocity.y; // preserve vertical velocity (gravity)
+  block.userData.body.velocity.z = direction.z * velocity * 60;
+}
+
 let steeringInput = 0;
 if (left) steeringInput += 1;
 if (right) steeringInput -= 1;
@@ -989,6 +1239,9 @@ function animate() {
 
   updateWalkableBlock();
   checkBlockContact();
+  world.step(1/60); // Step physics
+
+  syncPhysics();    // Sync mesh positions
 
   // --- ORBIT CAMERA FOLLOWS BLOCK OR WALKABLE BLOCK ---
   let target = walkableBlock ? walkableBlock.position : new THREE.Vector3(0, 0, 0);
@@ -1021,7 +1274,7 @@ if (blockBeingUsed) {
 
   const rollQuat = new THREE.Quaternion();
   rollQuat.setFromAxisAngle(new THREE.Vector3(0, 0, -1), blockRotation.z);
-
+  
   // Compose: yaw * roll * pitch (Y * Z * X)
   const finalQuat = new THREE.Quaternion();
   finalQuat.multiplyQuaternions(yawQuat, rollQuat); // yaw * roll
